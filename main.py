@@ -7,6 +7,8 @@ Pipeline: ESP32 uploads recorded audio -> Groq Whisper (STT) -> Groq Llama (LLM)
 import logging
 import os
 import re
+import threading
+import time
 import uuid
 import wave
 from contextlib import asynccontextmanager
@@ -70,6 +72,16 @@ GEO_TIMEOUT = 15
 
 AUDIO_MEDIA_TYPES = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".flac": "audio/flac"}
 
+# Conversation memory. Requests carrying a `session_id` get the last few exchanges
+# replayed to the LLM so follow-ups like "what about tomorrow?" resolve; requests
+# without one stay stateless, exactly as before. Held in memory on purpose - a
+# wearable's context should evaporate, and Render's free tier restarts often anyway.
+MAX_REMEMBERED_EXCHANGES = int(os.getenv("MAX_REMEMBERED_EXCHANGES", "6"))
+SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "900"))
+
+_sessions: dict[str, dict] = {}
+_sessions_lock = threading.Lock()
+
 # Which TTS provider actually served the last reply - reported by /health so you
 # can tell from the outside whether Groq TTS is live or gTTS is covering for it.
 _tts_state = {"active": None}
@@ -119,6 +131,11 @@ app = FastAPI(title="Wearable Voice Assistant Backend", version="1.0.0", lifespa
 
 class ChatRequest(BaseModel):
     message: str
+    session_id: str | None = None
+
+
+class ResetRequest(BaseModel):
+    session_id: str
 
 
 class TTSRequest(BaseModel):
@@ -168,6 +185,38 @@ def _request(method: str, url: str, service: str, **kwargs) -> requests.Response
     if response.status_code != 200:
         raise _upstream_error(service, response)
     return response
+
+
+def _prune_sessions(now: float) -> None:
+    """Drop idle sessions. Caller must hold _sessions_lock."""
+    for sid in [s for s, entry in _sessions.items() if now - entry["seen"] > SESSION_TTL_SECONDS]:
+        del _sessions[sid]
+
+
+def get_history(session_id: str | None) -> list[dict]:
+    if not session_id:
+        return []
+    with _sessions_lock:
+        _prune_sessions(time.monotonic())
+        entry = _sessions.get(session_id)
+        return list(entry["messages"]) if entry else []
+
+
+def remember(session_id: str | None, user_text: str, reply_text: str) -> None:
+    if not session_id:
+        return
+    now = time.monotonic()
+    with _sessions_lock:
+        _prune_sessions(now)
+        entry = _sessions.setdefault(session_id, {"messages": [], "seen": now})
+        entry["messages"] += [
+            {"role": "user", "content": user_text},
+            {"role": "assistant", "content": reply_text},
+        ]
+        # Keep only the most recent exchanges - unbounded history would grow the
+        # prompt (and the bill) on every single turn.
+        del entry["messages"][: -MAX_REMEMBERED_EXCHANGES * 2]
+        entry["seen"] = now
 
 
 def _header_safe(value: str, limit: int = 400) -> str:
@@ -238,7 +287,7 @@ def transcribe_audio(audio_path: Path) -> str:
     return response.json().get("text", "").strip()
 
 
-def chat_with_llm(user_text: str) -> str:
+def chat_with_llm(user_text: str, history: list[dict] | None = None) -> str:
     """Groq chat completion, OpenAI-compatible payload."""
     key = _require_key()
     response = _request(
@@ -250,6 +299,7 @@ def chat_with_llm(user_text: str) -> str:
             "model": CHAT_MODEL,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
+                *(history or []),
                 {"role": "user", "content": user_text},
             ],
             "temperature": 0.6,
@@ -404,6 +454,7 @@ def health():
         "auth_required": bool(API_SECRET),
         "tts_provider": TTS_PROVIDER,
         "tts_last_used": _tts_state["active"],
+        "active_sessions": len(_sessions),
     }
 
 
@@ -424,7 +475,18 @@ def stt(file: UploadFile = File(...)):
 
 @app.post("/api/chat", dependencies=[Depends(require_api_key)])
 def chat(request: ChatRequest):
-    return {"reply": chat_with_llm(request.message)}
+    reply = chat_with_llm(request.message, get_history(request.session_id))
+    remember(request.session_id, request.message, reply)
+    return {"reply": reply}
+
+
+@app.post("/api/reset", dependencies=[Depends(require_api_key)])
+def reset(request: ResetRequest):
+    """Forget a conversation - the ESP32 calls this when a session ends."""
+    with _sessions_lock:
+        existed = _sessions.pop(request.session_id, None) is not None
+    logger.info("[reset] session %s cleared=%s", request.session_id, existed)
+    return {"cleared": existed}
 
 
 @app.post("/api/tts", dependencies=[Depends(require_api_key)])
@@ -459,6 +521,7 @@ def voice(
     file: UploadFile = File(...),
     lat: float | None = Form(None),
     lon: float | None = Form(None),
+    session_id: str | None = Form(None),
 ):
     """Main pipeline the ESP32 calls: audio in, audio out.
 
@@ -467,9 +530,10 @@ def voice(
     audio_path, size = save_upload(file)
     has_fix = lat is not None and lon is not None
     logger.info(
-        "[voice] received %s | gps: %s",
+        "[voice] received %s | gps: %s | session: %s",
         _audio_summary(audio_path, size),
         f"{lat}, {lon}" if has_fix else "no fix",
+        session_id or "stateless",
     )
 
     try:
@@ -500,7 +564,11 @@ def voice(
         reply_text = NAV_PLACEHOLDER_REPLY
     else:
         branch = "llm-chat"
-        reply_text = chat_with_llm(heard_text)
+        reply_text = chat_with_llm(heard_text, get_history(session_id))
+
+    # Remembered on every branch, so "where am I" can be followed by "how far is
+    # that from the station?" without the LLM losing the thread.
+    remember(session_id, heard_text, reply_text)
 
     logger.info("[voice] branch: %s", branch)
     logger.info("[voice] reply: %r", reply_text)

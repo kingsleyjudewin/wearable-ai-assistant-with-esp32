@@ -43,15 +43,21 @@ Interactive API docs are at `http://localhost:8000/docs`.
 
 ## Talk to it from this laptop
 
-`talk.py` stands in for the ESP32 — it records from your mic, sends the audio through the
-pipeline, and plays the spoken reply through your speakers.
+`talk.py` stands in for the ESP32: it listens on your mic, sends the audio through the
+pipeline, plays the spoken reply through your speakers, and then listens again. It's a
+continuous conversation — it detects when you stop speaking rather than recording for a
+fixed time, and only **Ctrl+C** ends it.
 
 ```bash
-./.venv/bin/python talk.py                 # press Enter, speak 5s, hear the answer
-./.venv/bin/python talk.py -d 8            # record for 8 seconds
-./.venv/bin/python talk.py -t "hi there"   # type instead of speaking, still speaks back
-./.venv/bin/python talk.py --url http://192.168.1.42:8000
+./.venv/bin/python talk.py                     # conversation loop
+./.venv/bin/python talk.py --once              # a single question, then exit
+./.venv/bin/python talk.py -t "hi there"       # type instead of speaking, still speaks back
+./.venv/bin/python talk.py --lat 48.8584 --lon 2.2945   # pretend the GPS has a fix
+./.venv/bin/python talk.py --url https://your-app.onrender.com
 ```
+
+Every run gets its own `session_id`, so follow-ups work: *"What is the capital of Japan?"*
+→ *"And what about Italy?"* resolves correctly. The session is cleared when you exit.
 
 ## Run the test suite
 
@@ -148,7 +154,9 @@ actually received, so I2S misconfiguration is visible without opening the file:
 
 - Temp audio (uploads and generated mp3s) lives in `/tmp/voice_assistant`, created on startup
   and cleaned up after each request.
-- No conversation memory — every request is stateless.
+- Conversation memory is opt-in: send a `session_id` and the last 6 exchanges are replayed
+  to the LLM; omit it and the request is stateless as before. Sessions live in memory and
+  expire after 15 minutes idle (`SESSION_TTL_SECONDS`), or immediately via `/api/reset`.
 - Geocoding uses Nominatim, which rate-limits to ~1 request/second and requires the custom
   `User-Agent` set in `main.py`. If you add a contact address there, use a real one —
   Nominatim returns 403 for any User-Agent containing a placeholder like `example.com`.
@@ -169,12 +177,13 @@ actually received, so I2S misconfiguration is visible without opening the file:
 |---|---|---|---|
 | GET | `/health` | — | `{"status", "groq_key_set", "auth_required", "tts_provider", "tts_last_used"}` |
 | POST | `/api/stt` | multipart `file` | `{"text"}` |
-| POST | `/api/chat` | JSON `{"message"}` | `{"reply"}` |
+| POST | `/api/chat` | JSON `{"message"}`, optional `session_id` | `{"reply"}` |
+| POST | `/api/reset` | JSON `{"session_id"}` | `{"cleared"}` |
 | POST | `/api/tts` | JSON `{"text"}` | `audio/mpeg` |
 | GET | `/api/geocode` | query `place` | `{"lat", "lon", "display_name"}` |
 | GET | `/api/reverse-geocode` | query `lat`, `lon` | `{"display_name", "lat", "lon"}` |
 | POST | `/api/directions` | JSON `{"origin", "destination"}` | `{"distance_km", "duration_min", "origin", "destination"}` |
-| POST | `/api/voice` | multipart `file`, optional `lat`/`lon` | `audio/mpeg` + `X-Heard-Text` / `X-Reply-Text` headers |
+| POST | `/api/voice` | multipart `file`, optional `lat`/`lon`/`session_id` | audio + `X-Heard-Text` / `X-Reply-Text` headers |
 
 `/api/voice` picks one of four branches from the transcript, logging which one it took:
 
