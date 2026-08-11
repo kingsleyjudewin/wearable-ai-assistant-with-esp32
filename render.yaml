@@ -1,0 +1,23 @@
+# Render blueprint. In the Render dashboard: New -> Blueprint -> point at this repo.
+# GROQ_API_KEY is marked sync:false so Render prompts for it instead of reading it
+# from the repo - the key must never be committed.
+services:
+  - type: web
+    name: voice-assistant-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: GROQ_API_KEY
+        sync: false
+      # Groq TTS returns WAV and works from datacenter IPs, unlike gTTS.
+      - key: TTS_PROVIDER
+        value: auto
+      # Uncomment and set a long random string to require an X-API-Key header,
+      # then send the same value from the ESP32.
+      # - key: API_SECRET
+      #   sync: false

@@ -1,0 +1,14 @@
+# Never commit the real key - set it in the host's dashboard instead
+.env
+
+# Local Claude Code permission rules - can capture command text containing secrets
+.claude/
+
+.venv/
+__pycache__/
+*.pyc
+
+# local test artifacts
+*.mp3
+*.wav
+headers.txt
