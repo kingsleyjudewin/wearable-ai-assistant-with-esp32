@@ -85,9 +85,11 @@ only one.
 
 **gTTS is unreliable from cloud hosts.** It scrapes an unofficial Google endpoint that
 rate-limits datacenter IPs. That's why TTS defaults to `auto`: it tries **Groq TTS** first
-and falls back to gTTS. Groq TTS needs a one-time terms acceptance at
-[console.groq.com](https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english)
-— until you accept, the fallback quietly covers for it. Check which one is live:
+and falls back to gTTS. Groq TTS returns 16-bit mono 24 kHz WAV, voices are
+`autumn, diana, hannah, austin, daniel, troy` (set `GROQ_TTS_VOICE`), and it needs a
+one-time terms acceptance at
+[console.groq.com](https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english).
+Check which provider is live:
 
 ```bash
 curl https://your-app.onrender.com/health

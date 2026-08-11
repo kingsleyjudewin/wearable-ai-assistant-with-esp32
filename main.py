@@ -46,7 +46,10 @@ CHAT_MODEL = "llama-3.3-70b-versatile"
 # MAX98357A without an mp3 decoder.
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "auto").lower()
 GROQ_TTS_MODEL = os.getenv("GROQ_TTS_MODEL", "canopylabs/orpheus-v1-english")
-GROQ_TTS_VOICE = os.getenv("GROQ_TTS_VOICE", "tara")
+# Orpheus voices: autumn, diana, hannah, austin, daniel, troy.
+GROQ_TTS_VOICE = os.getenv("GROQ_TTS_VOICE", "hannah")
+# WAV comes back as 16-bit mono 24 kHz - the ESP32 can push it straight to the
+# MAX98357A over I2S with no mp3 decoder in between.
 GROQ_TTS_FORMAT = os.getenv("GROQ_TTS_FORMAT", "wav")
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
