@@ -127,6 +127,45 @@ BASE=https://your-app.onrender.com API_KEY=your-secret ./test_e2e.sh
 Render forces HTTPS, so use `WiFiClientSecure` — `setInsecure()` is simplest, or embed the
 root CA. Set the HTTP timeout to 30s+ so a cold start doesn't abort the request.
 
+## The ESP32 firmware
+
+[esp32/esp32.ino](esp32/esp32.ino) is the device side: press the button to start a
+conversation, it listens and replies continuously, press again to stop.
+
+### Wiring
+
+| INMP441 (mic) | ESP32 | | MAX98357A (amp) | ESP32 |
+|---|---|---|---|---|
+| VDD | 3V3 | | VIN | VIN (5V) |
+| GND | GND | | GND | GND |
+| L/R | GND | | DIN | GPIO 13 |
+| WS | GPIO 25 | | BCLK | GPIO 27 |
+| SCK | GPIO 26 | | LRC | GPIO 14 |
+| SD | GPIO 34 | | speaker | screw terminals |
+
+| Neo-6M (GPS) | ESP32 | | Button | ESP32 |
+|---|---|---|---|---|
+| VCC | VIN (5V) | | one leg | GPIO 4 |
+| GND | GND | | other leg | GND |
+| TX | GPIO 16 | | | |
+| RX | GPIO 17 | | | |
+
+Put the **220 µF** capacitor across the amplifier's VIN/GND (striped leg to GND — it's
+polarised) and a **0.1 µF** ceramic across VIN/GND of both the mic and the amp, as close
+to the modules as you can. Without them, loud audio browns out the ESP32 and it reboots
+mid-sentence. Power the board from the **5V 2A adapter**, not a laptop USB port.
+
+### Flashing
+
+1. *File → Preferences → Additional board manager URLs*:
+   `https://espressif.github.io/arduino-esp32/package_esp32_index.json`
+2. *Boards Manager* → install **esp32 by Espressif Systems**
+3. *Tools → Board* → **ESP32 Dev Module**, *Partition Scheme* → **Huge APP**
+4. Edit `WIFI_SSID`, `WIFI_PASSWORD` and `BACKEND_HOST` at the top of the sketch
+5. Upload, then open *Serial Monitor* at **115200 baud**
+
+No extra libraries are needed — GPS NMEA parsing is built in.
+
 ## Hardware contract
 
 The device is an ESP32 with an INMP441 I2S mic, a MAX98357A I2S amp, a Neo-6M GPS module,
